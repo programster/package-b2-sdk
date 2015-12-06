@@ -15,6 +15,12 @@ class B2
     private $m_authorizationToken;
     private $m_apiUrl;
     
+    
+    /**
+     * 
+     * @param type $accountId
+     * @param type $applicationKey
+     */
     public function __construct($accountId, $applicationKey)
     {
         $this->m_accountId = $accountId;
@@ -25,6 +31,10 @@ class B2
     }
     
     
+    /**
+     * 
+     * @return type
+     */
     public function authorizeAccount()
     {
         $params = array(
@@ -111,6 +121,10 @@ class B2
     }
     
     
+    /**
+     * 
+     * @return type
+     */
     public function downloadFileByName()
     {
         $params = array(
@@ -184,6 +198,7 @@ class B2
         
         return $this->sendAuthTokenRequest($params);
     }
+    
     
     /**
      * Lists the names of all files in a bucket, starting at a given name.
@@ -285,7 +300,6 @@ class B2
     
     /**
      * Helper function to send the request to Backblaze.
-     * 
      */
     private function sendRequest(array $params)
     {
@@ -320,6 +334,7 @@ class B2
         return $response; // Tell me about the rabbits, George!
     }
     
+    
     /**
      * Helper function to send the request to Backblaze.
      * 
@@ -327,7 +342,7 @@ class B2
     private function sendAuthTokenRequest(array $params)
     {
         $url = $this->m_apiUrl  . "/b2api/v1/" . $params['action'];
-
+        
         unset($params['action']);
         $session = curl_init($url);
         
@@ -335,12 +350,12 @@ class B2
         $post_fields = json_encode($params);
         
         curl_setopt($session, CURLOPT_POSTFIELDS, $post_fields); 
-
+        
         // Add headers
         $headers = array();
         $headers[] = "Authorization: " . $this->m_authorizationToken;
         curl_setopt($session, CURLOPT_HTTPHEADER, $headers); 
-
+        
         curl_setopt($session, CURLOPT_POST, true); // HTTP POST
         curl_setopt($session, CURLOPT_RETURNTRANSFER, true);  // Receive server response
         $server_output = curl_exec($session); // Let's do this!
