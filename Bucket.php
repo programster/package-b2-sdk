@@ -8,15 +8,27 @@ namespace Programster\B2;
 
 class Bucket
 {
+    private $m_b2;
     private $m_id;
     private $m_name;
     private $m_type;
     
-    public function __construct($id, $name, $type)
+    public function __construct(B2 $b2, $id, $name, $type)
     {
+        $this->m_b2 = $b2;
         $this->m_id = $id;
         $this->m_name = $name;
         $this->m_type = $type;
+    }
+    
+    
+    /**
+     * Delete the bucket, along with all its contents.
+     */
+    public function delete()
+    {
+        $this->m_b2->emptyBucket($this->m_id);
+        $this->m_b2->deleteBucket($this->m_id);
     }
     
     

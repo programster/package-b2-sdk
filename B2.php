@@ -14,6 +14,7 @@ class B2
     private $m_applicationKey;
     private $m_authorizationToken;
     private $m_apiUrl;
+    private $m_downloadUrl;
     
     
     /**
@@ -27,6 +28,7 @@ class B2
         $this->m_applicationKey = $applicationKey;
         $response = $this->authorizeAccount();
         $this->m_apiUrl = $response->apiUrl;
+        $this->m_downloadUrl = $response->downloadUrl;
         $this->m_authorizationToken = $response->authorizationToken;
     }
     
@@ -67,7 +69,12 @@ class B2
         );
         
         $response = $this->sendAuthTokenRequest($params);
-        $bucket = new Bucket($response->bucketId, $response->bucketName, $response->bucketType);
+        $bucket = new Bucket(
+            $this, 
+            $response->bucketId, 
+            $response->bucketName, 
+            $response->bucketType
+        );
         
         return $bucket;
     }
@@ -90,6 +97,25 @@ class B2
     
     
     /**
+     * Custom method to delete all files within a bucket
+     * @param type $bucketId - The ID of the bucket to delete.
+     */
+    public function emptyBucket($bucketId)
+    {
+        do
+        {
+            $files = $this->listFileVersions($bucketId, $maxFileCount=1000);
+            
+            foreach ($files as $file)
+            {
+                /* @var $file \Programster\B2\B2File */
+                $file->delete();
+            }
+        } while(count($files) > 0);
+    }
+    
+    
+    /**
      * Deletes one version of a file from B2.
      * https://www.backblaze.com/b2/docs/b2_delete_file_version.html
      * @param string $fileName - The name of the file.
@@ -99,10 +125,13 @@ class B2
     public function deleteFileVersion($fileName, $fileId)
     {
         $params = array(
-            "action" => "b2_delete_file_version",
+            "action"    => "b2_delete_file_version",
+            "fileName"  => $fileName,
+            "fileId"    => $fileId
         );
         
-        return $this->sendAuthTokenRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        /* @todo error checking  */
     }
     
     
@@ -117,7 +146,8 @@ class B2
             "fileId" => $fileId,
         );
         
-        return $this->sendAuthTokenRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        var_dump($response);
     }
     
     
@@ -154,6 +184,7 @@ class B2
      * Gets a URL to use for uploading files.
      * When you upload a file to B2, you must call b2_get_upload_url first to get the URL 
      * for uploading directly to the place where the file will be stored.
+     * @return UploadUrlResponse
      */
     public function getUploadUrl($bucketId)
     {
@@ -162,7 +193,10 @@ class B2
             "bucketId" => $bucketId
         );
         
-        return $this->sendAuthTokenRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        $responseObj = new UploadUrlResponse($response);
+        
+        return $responseObj;
     }
     
     
@@ -191,12 +225,32 @@ class B2
      */
     public function listBuckets()
     {
+        $buckets = array();
+        
         $params = array(
             "action" => "b2_list_buckets",
             "accountId" => $this->m_accountId
         );
         
-        return $this->sendAuthTokenRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        
+        if (isset($response->buckets))
+        {
+            foreach ($response->buckets as $bucketStdClass)
+            {
+                $buckets[] = new Bucket($this, 
+                    $bucketStdClass->bucketId, 
+                    $bucketStdClass->bucketName, 
+                    $bucketStdClass->bucketType
+                );
+            }
+        }
+        else
+        {
+            throw new \Exception("Error fetching bucket list: " . json_encode($response));
+        }
+        
+        return $buckets;
     }
     
     
@@ -207,7 +261,7 @@ class B2
     public function listFileNames()
     {
         $params = array(
-            "action" => "b2_list_file_names",
+            "action"    => "b2_list_file_names",
             "accountId" => $this->m_accountId
         );
         
@@ -224,12 +278,22 @@ class B2
     public function listFileVersions($bucketId, $maxFileCount=100)
     {
         $params = array(
-            "action" => "b2_list_file_versions",
-            "bucketId" => $bucketId,
+            "action"       => "b2_list_file_versions",
+            "bucketId"     => $bucketId,
             "maxFileCount" => $maxFileCount
         );
         
-        return $this->sendAuthTokenRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        
+        $fileStdClasses = $response->files;
+        $files = array();
+        
+        foreach ($fileStdClasses as $fileStdClass)
+        {
+            $files[] = B2File::createFromListFileVersions($this, $bucketId, $fileStdClass);
+        }
+        
+        return $files;
     }
     
     
@@ -262,29 +326,39 @@ class B2
     /**
      * Uploads one file to B2, returning its unique file ID.
      * https://www.backblaze.com/b2/docs/b2_upload_file.html
-     * @param type $uploadFileName
-     * @param type $filepath
-     * @param type $bucketId
-     * @param type $contentType - the type of content the file is (e.g. "text/plain")
-     * @param type $uploadAuthToken - // Provided by b2_get_upload_url
+     * @param string $uploadFileName - the name we wish to have for the file once uploaded.
+     * @param string $filepath - the path to the file we wish to uplod
+     * @param string $uploadAuthToken - // Provided by b2_get_upload_url
+     * @param string $contentType - specify the mime type of the content. If not specified then
+     *                              PHP will try to auto-detect it.
+     * @return B2File
      */
-    public function uploadFile($uploadFileName, $filepath, $bucketId, $contentType, $uploadAuthToken)
-    {   
-        $handle = fopen($filepath, 'r');
-        $read_file = fread($handle,filesize($filepath));
+    public function uploadFile($uploadFileName, $filepath, UploadUrlResponse $uploadUrlResponse, $contentType="")
+    {
+        if (!file_exists($filepath))
+        {
+            throw new Exception("File [" . $filepath . "] does not exist.");
+        }
         
-        $upload_url = ""; // Provided by b2_get_upload_url
+        if ($contentType === "")
+        {
+            $contentType = mime_content_type($filepath);
+        }
+        
+        $handle = fopen($filepath, 'r');
+        $read_file = fread($handle, filesize($filepath));
+        
         $content_type = "text/plain";
         $sha1_of_file_data = sha1_file($filepath);
         
-        $session = curl_init($upload_url);
+        $session = curl_init($uploadUrlResponse->getUploadUrl());
         
         // Add read file as post field
         curl_setopt($session, CURLOPT_POSTFIELDS, $read_file); 
         
         // Add headers
         $headers = array();
-        $headers[] = "Authorization: " . $uploadAuthToken;
+        $headers[] = "Authorization: " . $uploadUrlResponse->getAuthorizationToken();
         $headers[] = "X-Bz-File-Name: " . $uploadFileName;
         $headers[] = "Content-Type: " . $content_type;
         $headers[] = "X-Bz-Content-Sha1: " . $sha1_of_file_data;
@@ -294,7 +368,10 @@ class B2
         curl_setopt($session, CURLOPT_RETURNTRANSFER, true);  // Receive server response
         $server_output = curl_exec($session); // Let's do this!
         curl_close ($session); // Clean up
-        echo ($server_output); // Tell me about the rabbits, George!
+        $responseObj = json_decode($server_output);
+        $file = B2File::createFromUploadResponse($this, $responseObj);
+        
+        return $file;
     }
     
     
@@ -365,15 +442,12 @@ class B2
         
         if ($response === null)
         {
-            var_dump($server_output);
-            die();
             throw new \Exception($server_output);
         }
         
         if (isset($response->code) && $response->code === "bad_json")
         {
-            var_dump($response);
-            die();
+            throw new \Exception(json_encode($response));
         }
         
         return $response; // Tell me about the rabbits, George!
