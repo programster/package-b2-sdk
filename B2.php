@@ -5,16 +5,23 @@
  * https://www.backblaze.com/b2/docs/b2_create_bucket.html
  */
 
+namespace Programster\B2;
+
 
 class B2
 {
     private $m_accountId;
     private $m_applicationKey;
+    private $m_authorizationToken;
+    private $m_apiUrl;
     
     public function __construct($accountId, $applicationKey)
     {
         $this->m_accountId = $accountId;
         $this->m_applicationKey = $applicationKey;
+        $response = $this->authorizeAccount();
+        $this->m_apiUrl = $response->apiUrl;
+        $this->m_authorizationToken = $response->authorizationToken;
     }
     
     
@@ -24,7 +31,7 @@ class B2
             "action" => "b2_authorize_account",
         );
         
-        $response = sendRequest($params);
+        return $this->sendRequest($params);
     }
     
     
@@ -44,11 +51,15 @@ class B2
         
         $params = array(
             "action" => "b2_create_bucket",
+            "accountId" => $this->m_accountId,
             "bucketName" => $bucketName,
             "bucketType" => $bucketType,
         );
         
-        $response = sendRequest($params);
+        $response = $this->sendAuthTokenRequest($params);
+        $bucket = new Bucket($response->bucketId, $response->bucketName, $response->bucketType);
+        
+        return $bucket;
     }
     
     
@@ -60,10 +71,11 @@ class B2
     {
         $params = array(
             "action" => "b2_delete_bucket",
-            "bucketId" => $bucketId,
+            "accountId" => $this->m_accountId,
+            "bucketId" => $bucketId
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -80,7 +92,7 @@ class B2
             "action" => "b2_delete_file_version",
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -95,7 +107,7 @@ class B2
             "fileId" => $fileId,
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -105,7 +117,7 @@ class B2
             "action" => "b2_download_file_by_name",
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -120,7 +132,7 @@ class B2
             "fileId" => $fileId
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -136,7 +148,7 @@ class B2
             "bucketId" => $bucketId
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -155,7 +167,7 @@ class B2
             "fileName" => $fileName
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -167,9 +179,10 @@ class B2
     {
         $params = array(
             "action" => "b2_list_buckets",
+            "accountId" => $this->m_accountId
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     /**
@@ -183,7 +196,7 @@ class B2
             "accountId" => $this->m_accountId
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -201,7 +214,7 @@ class B2
             "maxFileCount" => $maxFileCount
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -227,7 +240,7 @@ class B2
             "bucketType" => $bucketType
         );
         
-        $response = sendRequest($params);
+        return $this->sendAuthTokenRequest($params);
     }
     
     
@@ -244,16 +257,16 @@ class B2
     {   
         $handle = fopen($filepath, 'r');
         $read_file = fread($handle,filesize($filepath));
-
+        
         $upload_url = ""; // Provided by b2_get_upload_url
         $content_type = "text/plain";
         $sha1_of_file_data = sha1_file($filepath);
-
+        
         $session = curl_init($upload_url);
-
+        
         // Add read file as post field
         curl_setopt($session, CURLOPT_POSTFIELDS, $read_file); 
-
+        
         // Add headers
         $headers = array();
         $headers[] = "Authorization: " . $uploadAuthToken;
@@ -261,7 +274,7 @@ class B2
         $headers[] = "Content-Type: " . $content_type;
         $headers[] = "X-Bz-Content-Sha1: " . $sha1_of_file_data;
         curl_setopt($session, CURLOPT_HTTPHEADER, $headers); 
-
+        
         curl_setopt($session, CURLOPT_POST, true); // HTTP POST
         curl_setopt($session, CURLOPT_RETURNTRANSFER, true);  // Receive server response
         $server_output = curl_exec($session); // Let's do this!
@@ -278,19 +291,76 @@ class B2
     {
         $credentials = base64_encode(ACCOUNT_ID . ":" . APPLICATION_KEY);
         $url = "https://api.backblaze.com/b2api/v1/" . $params['action'];
-
+        
+        unset($params['action']);
         $session = curl_init($url);
-
+        
+        // Add post fields
+        $post_fields = json_encode($params);
+        
+        curl_setopt($session, CURLOPT_POSTFIELDS, $post_fields); 
+        
         // Add headers
         $headers = array();
         $headers[] = "Accept: application/json";
         $headers[] = "Authorization: Basic " . $credentials;
         curl_setopt($session, CURLOPT_HTTPHEADER, $headers);  // Add headers
-
+        
         curl_setopt($session, CURLOPT_HTTPGET, true);  // HTTP GET
         curl_setopt($session, CURLOPT_RETURNTRANSFER, true); // Receive server response
         $server_output = curl_exec($session);
         curl_close ($session);
-        return $server_output;
+        $response = json_decode($server_output);
+        
+        if (isset($response->code) && $response->code === "bad_json")
+        {
+            throw new \Exception($response->message);
+        }
+        
+        return $response; // Tell me about the rabbits, George!
+    }
+    
+    /**
+     * Helper function to send the request to Backblaze.
+     * 
+     */
+    private function sendAuthTokenRequest(array $params)
+    {
+        $url = $this->m_apiUrl  . "/b2api/v1/" . $params['action'];
+
+        unset($params['action']);
+        $session = curl_init($url);
+        
+        // Add post fields
+        $post_fields = json_encode($params);
+        
+        curl_setopt($session, CURLOPT_POSTFIELDS, $post_fields); 
+
+        // Add headers
+        $headers = array();
+        $headers[] = "Authorization: " . $this->m_authorizationToken;
+        curl_setopt($session, CURLOPT_HTTPHEADER, $headers); 
+
+        curl_setopt($session, CURLOPT_POST, true); // HTTP POST
+        curl_setopt($session, CURLOPT_RETURNTRANSFER, true);  // Receive server response
+        $server_output = curl_exec($session); // Let's do this!
+        curl_close ($session); // Clean up
+        
+        $response = json_decode($server_output);
+        
+        if ($response === null)
+        {
+            var_dump($server_output);
+            die();
+            throw new \Exception($server_output);
+        }
+        
+        if (isset($response->code) && $response->code === "bad_json")
+        {
+            var_dump($response);
+            die();
+        }
+        
+        return $response; // Tell me about the rabbits, George!
     }
 }

@@ -1,0 +1,22 @@
+{
+    "name": "programster/b2",
+    "type": "sdk",
+    "description": "An package/sdk to interface with B2 cloud storage.",
+    "keywords": ["autoloader"],
+    "homepage": "https://github.com/programster/package-b2-sdk/tree/master/testing",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Stuart Page (Programster)",
+            "email": "sdpagent@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Programster\\B2\\": ""
+        }
+    }
+}
